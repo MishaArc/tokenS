@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: aioetherscan
+Version: 0.8.12
+Summary: Etherscan API async Python wrapper
+Home-page: https://github.com/ape364/aioetherscan
+License: MIT
+Author: ape364
+Author-email: ape364@gmail.com
+Requires-Python: >=3.9,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Dist: aiohttp (>=3.4,<4.0)
+Requires-Dist: aiohttp-retry (>=2.8.3,<3.0.0)
+Requires-Dist: asyncio_throttle (>=1.0.1,<2.0.0)

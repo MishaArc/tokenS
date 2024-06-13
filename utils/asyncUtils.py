@@ -1,25 +1,24 @@
 import asyncio
 from .utils import timestamp_to_datetime, format_large_number
 import aiohttp
-from web3 import Web3
-from web3.middleware import geth_poa_middleware
+
 from config import CONTRACT_ABI, ARBITRUM_RPC_URL as RPC_URL, CONTRACT_ADDRESS, api_key, chat_collection
 from datetime import datetime, timedelta
 
 # Constants
-DECIMALS = 10 ** 18  # Adjust this according to the token's decimals
+DECIMALS = 10 ** 18
 
 
 async def fetch_total_supply(contract):
     loop = asyncio.get_event_loop()
     total_supply = await loop.run_in_executor(None, contract.functions.totalSupply().call)
-    return total_supply / DECIMALS  # Convert to full tokens
+    return total_supply / DECIMALS
 
 
 async def fetch_balance(contract, address):
     loop = asyncio.get_event_loop()
     balance = await loop.run_in_executor(None, contract.functions.balanceOf(address).call)
-    return balance / DECIMALS  # Convert to full tokens
+    return balance / DECIMALS
 
 
 async def get_current_supply(burned_tokens, total_tokens):
@@ -27,7 +26,7 @@ async def get_current_supply(burned_tokens, total_tokens):
 
 
 async def get_burned_percent(total, burned):
-    return (burned / total) * 100 if total > 0 else 0  # Calculate percentage
+    return (burned / total) * 100 if total > 0 else 0
 
 
 async def fetch_dexview_token_data(token_addresses="0xD44257ddE89ca53F1471582f718632e690e46Dc2"):
@@ -39,7 +38,7 @@ async def fetch_dexview_token_data(token_addresses="0xD44257ddE89ca53F1471582f71
 
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(
             ssl=False,
-            limit=1,  # or use_dns_cache=False
+            limit=1,
     )) as session:
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
@@ -52,14 +51,18 @@ async def fetch_dexview_token_data(token_addresses="0xD44257ddE89ca53F1471582f71
 
 
 def parse_token_amount(input_data):
-    # Example: assuming the last 64 hex characters represent the amount in a transfer(input, amount) call
     hex_amount = input_data[-64:]
-    return int(hex_amount, 16) / (10 ** 18)  # Adjust for token's decimals
+    return int(hex_amount, 16) / (10 ** 18)
 
 
 async def fetch_transactions_by_date(from_address="0xD44257ddE89ca53F1471582f718632e690e46Dc2",
-                                     to_address="dead", api_key=api_key,
+                                     api_key=api_key,
                                      start_date=None, end_date=None):
+    burn_addresses = [
+        '0x0000000000000000000000000000000000000000',
+        '0x000000000000000000000000000000000000dead'
+    ]
+
     if start_date is None:
         start_date = datetime.utcnow() - timedelta(days=7)
     if end_date is None:
@@ -79,28 +82,28 @@ async def fetch_transactions_by_date(from_address="0xD44257ddE89ca53F1471582f718
                     tx_date = timestamp_to_datetime(tx['timeStamp'])
 
                     if start_date <= tx_date <= end_date:
-                        if to_address in tx['input']:
-                            filtered_transactions.append(tx)
+                        input_data = tx['input']
+                        if input_data.startswith('0xa9059cbb'):
+                            to_address = '0x' + input_data[34:74]
+                            if to_address.lower() in [addr.lower() for addr in burn_addresses]:
+                                filtered_transactions.append(tx)
+
                 return filtered_transactions
             else:
-                return f"Failed to fetch transactions, status code: {response.status}"
+                print(f"Failed to fetch transactions, status code: {response.status}")
+                return []
 
 
 async def get_burnt_tokens_from_trans(tx_data):
-    # Simulating an asynchronous operation, such as fetching data or a sleep
-    await asyncio.sleep(0)  # This is just a placeholder and can be removed
+    await asyncio.sleep(0)
 
-    # Extract the 'input' field from the transaction data
     input_data = tx_data['input']
 
-    # Check if input data is at least the size of methodId + address + minimal token data
     if len(input_data) < 74:
         return "Invalid input data length"
 
-    # The amount is located after the first 74 characters (method ID + address)
     amount_hex = input_data[74:]
-    # print(f"Hex Amount: {amount_hex}")  # Debugging
-    # Convert hexadecimal to decimal
+
     amount_dec = int(amount_hex, 16)
     tokens = amount_dec / 10 ** 18
     return tokens
@@ -113,32 +116,41 @@ async def create_transaction_report(transactions):
             burnt_tokens = await get_burnt_tokens_from_trans(tx)
             formatted_tokens = format_large_number(burnt_tokens)
 
-            # Convert the Unix timestamp to a human-readable date
-            timestamp = int(tx['timeStamp'])
             date = timestamp_to_datetime(tx['timeStamp'])
 
-            # Assemble all transaction info into one string.
             tx_info = (
                 f"Transaction Hash: {tx['hash']}\n"
                 f"From: {tx['from']}\n"
                 f"To: {tx['to']}\n"
-                f"Amount: {formatted_tokens} Tokens\n"  # Assuming the 'value' field, need conversion if in wei
-                f"Date: {date}\n"  # Include formatted date
-                "\n"  # Add a newline for spacing between transactions
+                f"Amount: {formatted_tokens} Tokens\n"  
+                f"Date: {date}\n"  
+                "\n"
             )
-            # Write the assembled transaction info to the file at once.
             file.write(tx_info)
     return filename
 
 
 async def calculate_burned_tokens(transactions):
+    burn_addresses = [
+        '0000000000000000000000000000000000000000',
+        '000000000000000000000000000000000000dead'
+    ]
+
     total_burned = 0
     for tx in transactions:
-        if 'dead' in tx['input']:  # Check if the transaction is a burn transaction
+        if any(burn_address in tx['input'].lower() for burn_address in burn_addresses):
             burned_amount = parse_token_amount(tx['input'])
             total_burned += burned_amount
 
-    return total_burned  # Convert to a human-readable format
+    return total_burned
+
+
+async def get_burned_in_a_week(transactions):
+    total = 0
+    for tx in transactions:
+        burnt_tokens = await get_burnt_tokens_from_trans(tx)
+        total += burnt_tokens
+    return total
 
 
 async def add_chat_id(chat_id):
@@ -158,10 +170,92 @@ async def remove_chat_id(chat_id):
     await chat_collection.delete_one({'chat_id': chat_id})
 
 
-async def main():
-    a = await fetch_dexview_token_data()
-    print(a)
+async def get_burnt_tokens(contract_address=CONTRACT_ADDRESS, api_key=api_key, decimals=18):
+    burn_addresses = [
+        '0x000000000000000000000000000000000000dEaD',
+        '0x0000000000000000000000000000000000000000'
+    ]
+    burnt_tokens_sum = 0
+    max_results_per_page = 10000
+
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(
+            ssl=False,
+    )) as session:
+        for burn_address in burn_addresses:
+            page = 1
+            while True:
+                url = f"https://api.arbiscan.io/api?module=account&action=tokentx&contractaddress={contract_address}&address={burn_address}&page={page}&offset={max_results_per_page}&sort=desc&apikey={api_key}"
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        print(f"Failed to fetch data, status code: {response.status}")
+                        break
+                    try:
+                        data = await response.json()
+                    except aiohttp.ContentTypeError:
+                        print(f"Error decoding JSON at {url}")
+                        break
+
+                    if 'result' in data and isinstance(data['result'], list):
+                        for tx in data['result']:
+                            if tx['to'].lower() == burn_address.lower():
+                                burnt_tokens_sum += int(tx['value'])
+
+                        if len(data['result']) < max_results_per_page:
+                            break
+
+                        page += 1
+                    else:
+                        break
+
+    burnt_tokens_sum /= (10 ** decimals)
+    return burnt_tokens_sum
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+async def get_burnt_tokens_weekly(contract_address=CONTRACT_ADDRESS, api_key=api_key, decimals=18):
+    burn_addresses = [
+        '0x000000000000000000000000000000000000dEaD',
+        '0x0000000000000000000000000000000000000000'
+    ]
+    burnt_tokens_sum = 0
+    max_results_per_page = 10000
+
+    now = datetime.utcnow()
+    seven_days_ago = now - timedelta(days=7)
+    now_timestamp = int(now.timestamp())
+    seven_days_ago_timestamp = int(seven_days_ago.timestamp())
+
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(
+            ssl=False,
+            limit=1,
+    )) as session:
+        for burn_address in burn_addresses:
+            page = 1
+            while True:
+                url = f"https://api.arbiscan.io/api?module=account&action=tokentx&contractaddress={contract_address}&address={burn_address}&page={page}&offset={max_results_per_page}&sort=desc&apikey={api_key}"
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        print(f"Failed to fetch data, status code: {response.status}")
+                        break
+                    try:
+                        data = await response.json()
+                    except aiohttp.ContentTypeError:
+                        print(f"Error decoding JSON at {url}")
+                        break
+
+                    if 'result' in data and isinstance(data['result'], list):
+                        for tx in data['result']:
+                            tx_timestamp = int(tx['timeStamp'])
+                            if seven_days_ago_timestamp <= tx_timestamp <= now_timestamp:
+                                if tx['to'].lower() == burn_address.lower():
+                                    burnt_tokens_sum += int(tx['value'])
+
+                        if len(data['result']) < max_results_per_page:
+                            break
+
+                        page += 1
+                    else:
+                        break
+
+    burnt_tokens_sum /= (10 ** decimals)
+    return burnt_tokens_sum
+

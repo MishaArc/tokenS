@@ -1,28 +1,22 @@
 import asyncio
-
-from aiogram.filters import Command, CommandStart
-from web3 import Web3
-from web3.middleware import geth_poa_middleware
-from aiogram.types import (
-    FSInputFile
-)
-
-from config import api_key, text_list, callback_data_list, CONTRACT_ADDRESS, CONTRACT_ABI, ARBITRUM_RPC_URL as RPC_URL
-
 from datetime import datetime, timedelta
 
 from aiogram import Router, types
+from aiogram.filters import Command, CommandStart
+from aiogram.types import (
+    FSInputFile
+)
+from web3 import Web3
+from web3.middleware import geth_poa_middleware
 
-from utils.asyncUtils import (fetch_total_supply, fetch_balance, get_current_supply, get_burned_percent,
+from config import api_key, text_list, callback_data_list, CONTRACT_ADDRESS, CONTRACT_ABI, ARBITRUM_RPC_URL as RPC_URL
+from utils.asyncUtils import (fetch_total_supply, get_current_supply, get_burned_percent,
                               fetch_transactions_by_date, get_burnt_tokens_from_trans, calculate_burned_tokens,
-                              fetch_dexview_token_data, add_chat_id
+                              fetch_dexview_token_data, add_chat_id, get_burnt_tokens, get_burnt_tokens_weekly
                               )
-
 from utils.utils import (button_builder, fetch_transactions_by_quantity, format_large_number,
-                         get_burnt_tokens, format_price, timestamp_to_datetime
+                         format_price, timestamp_to_datetime
                          )
-
-from handlers.create_file.create_file import create_transaction_report
 
 router = Router()
 
@@ -63,55 +57,59 @@ async def week_statistics(message: types.Message):
     web3 = Web3(Web3.HTTPProvider(RPC_URL))
     web3.middleware_onion.inject(geth_poa_middleware, layer=0)
     from_address = CONTRACT_ADDRESS
-    to_address = "dead"
     now = datetime.utcnow()
     start_date = now - timedelta(days=7)
     end_date = now
 
     contract = web3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
-    BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD"
     total_supply, burned_amount, transactions = await asyncio.gather(
         fetch_total_supply(contract),
-        fetch_balance(contract, Web3.to_checksum_address(BURN_ADDRESS)),
-        fetch_transactions_by_date(from_address, to_address, api_key, start_date, end_date)
+        get_burnt_tokens(),
+        fetch_transactions_by_date(from_address, api_key, start_date, end_date)
     )
     current_supply = await get_current_supply(burned_amount, total_supply)
     burned_percent = await get_burned_percent(total_supply, burned_amount)
 
-
     if isinstance(transactions, str):
-        await message.answer(transactions)  # Error message from fetching
+        await message.answer(transactions)
         return
 
-    # Calculate burned tokens
-    burned_tokens = await calculate_burned_tokens(transactions)
+    burned_tokens = await get_burnt_tokens_weekly()
 
-    # Fetch DexView data
     dex_info = await fetch_dexview_token_data(
-        CONTRACT_ADDRESS)  # This function needs implementation to fetch data from the dexview API
+        CONTRACT_ADDRESS)
     if not dex_info or 'pairs' not in dex_info or len(dex_info['pairs']) == 0:
         await message.answer("Failed to fetch token data from DexView.")
         return
 
-    # Extract pair information
     pair_info = dex_info['pairs'][0]  # Assuming we want the first pair
     price_usd = format_price(pair_info['priceUsd'])
-    volume_24h = pair_info['volume']['h24']
     liquidity_usd = pair_info['liquidity']['usd']
-
-    # Format the message
+    alert_message = "📊 <b>Weekly Token Report</b> 📊"
     stats_message = (
+        f"{alert_message}\n\n"
         f"📅 Date Range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}\n"
         f"🔥 Total Burned Tokens in the Last 7 Days: {format_large_number(burned_tokens)} Tokens\n"
         f"🔥 Burned Percentage: {burned_percent:.2f}%\n"
         f"🏦 Current Supply: {format_large_number(current_supply)} Tokens\n"
         f"💵 Price (USD): ${price_usd}\n"
-        f"📊 24h Volume: {format_large_number(volume_24h)}\n"
-        f"💧 Liquidity (USD): ${format_large_number(liquidity_usd)}\n"
+        f"💧 Liquidity (USD): ${format_large_number(liquidity_usd)}\n\n"
+        f"📈 <a href='https://www.dextools.io/app/en/arbitrum/pair-explorer/0xbee32bffb0cd21278acd8b00786b6e840e7a7108?t=1715520319056'>Chart</a> |  "
+        f"💹 <a href='https://www.sushi.com/swap?outputCurrency=0xd44257dde89ca53f1471582f718632e690e46dc2'>Trade</a> |  "
+        f"📊 <a href='https://arbiscan.io/address/0xd44257dde89ca53f1471582f718632e690e46dc2'>Token</a>"
     )
 
-    await message.answer(stats_message, parse_mode="HTML")
+    await message.answer_photo(
+        photo="AgACAgIAAxkBAAICNmZBDDMHwAsaQ-HklZlQLX_tatwdAALl3TEbaU8ISkKOB1wyeJOOAQADAgADeQADNQQ",
+        caption=stats_message, parse_mode="HTML")
 
+
+# @router.message()
+# async def handle_photo(message: types.Message):
+#     photo = message.photo[-1]
+#     file_id = photo.file_id
+#
+#     await message.reply(f"Received your photo. File ID: {file_id}")
 
 @router.message(Command('lastburns'))
 async def last_burns(message: types.Message):
@@ -130,15 +128,13 @@ async def send_chat_id(message: types.Message):
 @router.callback_query(lambda c: c.data and c.data.startswith('burnLastMonth'))
 async def handle_burn_month_query(callback_query: types.CallbackQuery):
     from_address = '0xD44257ddE89ca53F1471582f718632e690e46Dc2'
-    to_address = 'dead'
     now = datetime.utcnow()
-    start_date = now - timedelta(days=30)  # Default last 30 days for monthly data
-    end_date = now  # End date is current time
-    transactions = await fetch_transactions_by_date(from_address, to_address, api_key, start_date, end_date)
+    start_date = now - timedelta(days=30)
+    end_date = now
+    transactions = await fetch_transactions_by_date(from_address, api_key, start_date, end_date)
 
     if transactions:
-        report_filename = await create_transaction_report(transactions)
-        # Use the file path to create an InputFile object
+        report_filename = await get_burnt_tokens_from_trans(transactions)
 
         document = FSInputFile(f"{report_filename}")
         await callback_query.message.answer_document(document,
@@ -152,8 +148,8 @@ async def handle_burn_month_query(callback_query: types.CallbackQuery):
 @router.callback_query(lambda c: c.data and c.data.startswith('burn_'))
 async def handle_burn_query(callback_query: types.CallbackQuery):
     action = callback_query.data
-    from_address = '0xD44257ddE89ca53F1471582f718632e690e46Dc2'  # Your specific from address
-    to_address = 'dead'  # Specific to address
+    from_address = '0xD44257ddE89ca53F1471582f718632e690e46Dc2'
+    to_address = 'dead'
     transactions = None
     if action == "burn_last_5":
         transactions = await fetch_transactions_by_quantity(from_address, to_address, api_key, 5)
@@ -168,7 +164,7 @@ async def handle_burn_query(callback_query: types.CallbackQuery):
             date = timestamp_to_datetime(tx["timeStamp"])
             tx_info = (
                 f"🔥 Burnt Tokens: {formatted_tokens} Tokens\n"
-                 f"📅 Date: {date}\n"
+                f"📅 Date: {date}\n"
                 f"📤 From: {tx['from']}\n"
                 f"🔗 [Hash: {tx['hash'][:10]}...]<a href='https://arbiscan.io/tx/{tx['hash']}'>View Transaction</a>"
             )
@@ -197,43 +193,42 @@ async def prepare_week_statistics():
     web3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
     contract = web3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
-    BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD"
     total_supply = await fetch_total_supply(contract)
-    burned_amount = await fetch_balance(contract, Web3.to_checksum_address(BURN_ADDRESS))
+    burned_amount = await get_burnt_tokens()
     current_supply = await get_current_supply(burned_amount, total_supply)
     burned_percent = await get_burned_percent(total_supply, burned_amount)
 
     from_address = CONTRACT_ADDRESS
-    to_address = "dead"
     now = datetime.utcnow()
     start_date = now - timedelta(days=7)
     end_date = now
 
-    # Fetch transactions
-    transactions = await fetch_transactions_by_date(from_address, to_address, api_key, start_date, end_date)
-
-    burned_tokens = await calculate_burned_tokens(transactions)
-
-    # Fetch DexView data
+    burned_tokens = await get_burnt_tokens_weekly()
     dex_info = await fetch_dexview_token_data(
-        CONTRACT_ADDRESS)  # This function needs implementation to fetch data from the dexview API
-
-    # Extract pair information
-    pair_info = dex_info['pairs'][0]  # Assuming we want the first pair
+        CONTRACT_ADDRESS)
+    pair_info = dex_info['pairs'][0]
     price_usd = format_price(pair_info['priceUsd'])
-    volume_24h = pair_info['volume']['h24']
     liquidity_usd = pair_info['liquidity']['usd']
 
-    # Format the message
+    alert_message = "📊 <b>Weekly Token Statistics Report</b> 📊"
     stats_message = (
+        f"{alert_message}\n\n"
         f"📅 Date Range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}\n"
         f"🔥 Total Burned Tokens in the Last 7 Days: {format_large_number(burned_tokens)} Tokens\n"
         f"🔥 Burned Percentage: {burned_percent:.2f}%\n"
         f"🏦 Current Supply: {format_large_number(current_supply)} Tokens\n"
         f"💵 Price (USD): ${price_usd}\n"
-        f"📊 24h Volume: {format_large_number(volume_24h)}\n"
-        f"💧 Liquidity (USD): ${format_large_number(liquidity_usd)}\n"
+        f"💧 Liquidity (USD): ${format_large_number(liquidity_usd)}\n\n"
+        f"📈 <a href='https://www.dextools.io/app/en/arbitrum/pair-explorer/0xbee32bffb0cd21278acd8b00786b6e840e7a7108?t=1715520319056'>Chart</a> |  "
+        f"💹 <a href='https://www.sushi.com/swap?outputCurrency=0xd44257dde89ca53f1471582f718632e690e46dc2'>Trade</a> |  "
+        f"📊 <a href='https://arbiscan.io/address/0xd44257dde89ca53f1471582f718632e690e46dc2'>Token</a>"
     )
 
-    # Send the detailed statistics
     return stats_message
+
+# async def main():
+#     a = await prepare_week_statistics()
+#     print(a)
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())

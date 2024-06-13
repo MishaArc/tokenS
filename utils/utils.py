@@ -24,37 +24,40 @@ def get_total_supply(contract_address, api_key, decimals=18):
 
 
 def get_burnt_tokens(contract_address, api_key, decimals=18):
-    burn_address = '0x000000000000000000000000000000000000dEaD'
+    burn_addresses = [
+        '0x000000000000000000000000000000000000dEaD',
+        '0x0000000000000000000000000000000000000000'
+    ]
     burnt_tokens_sum = 0
-    page = 1
     max_results_per_page = 10000  # Set a reasonable limit for each page
 
-    while True:
-        url = f"https://api.arbiscan.io/api?module=account&action=tokentx&contractaddress={contract_address}&address={burn_address}&page={page}&offset={max_results_per_page}&sort=desc&apikey={api_key}"
-        response = requests.get(url)
-        data = response.json()
+    for burn_address in burn_addresses:
+        page = 1
+        while True:
+            url = f"https://api.arbiscan.io/api?module=account&action=tokentx&contractaddress={contract_address}&address={burn_address}&page={page}&offset={max_results_per_page}&sort=desc&apikey={api_key}"
+            response = requests.get(url)
+            data = response.json()
 
-        # Check if there are transactions returned and that it's not an error message
-        if 'result' in data and isinstance(data['result'], list):
-            # Process the transactions on the current page
-            for tx in data['result']:
-                if tx['to'].lower() == burn_address.lower():
-                    burnt_tokens_sum += int(tx['value'])
+            # Check if there are transactions returned and that it's not an error message
+            if 'result' in data and isinstance(data['result'], list):
+                # Process the transactions on the current page
+                for tx in data['result']:
+                    if tx['to'].lower() == burn_address.lower():
+                        burnt_tokens_sum += int(tx['value'])
 
-            # If the number of transactions is less than the maximum, we've reached the last page
-            if len(data['result']) < max_results_per_page:
+                # If the number of transactions is less than the maximum, we've reached the last page
+                if len(data['result']) < max_results_per_page:
+                    break
+
+                # Increment the page number to get the next set of transactions
+                page += 1
+            else:
+                # If there's no result key or there's an error, stop the loop
                 break
-
-            # Increment the page number to get the next set of transactions
-            page += 1
-        else:
-            # If there's no result key or there's an error, stop the loop
-            break
 
     # Convert from smallest unit to the appropriate unit by applying the decimals
     burnt_tokens_sum /= (10 ** decimals)
     return burnt_tokens_sum
-
 
 def get_current_supply(contract_address, api_key, initial_supply, decimals=18):
     # Get the number of burned tokens
@@ -116,6 +119,8 @@ async def fetch_transactions_by_quantity(from_address, to_address, api_key, last
 
 
 def format_large_number(number):
+    if number is None:
+        return "N/A"  
     if number < 1_000:
         return f"{number}"
     elif number < 1_000_000:
@@ -142,6 +147,7 @@ def format_price(value):
     return formatted_value
 
 
+print(get_burnt_tokens(contract_address=CONTRACT_ADDRESS, api_key=API_KEY))
 
 # Usage example
 # network = 'arbitrum'  # Specify the correct network

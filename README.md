@@ -23,3 +23,7 @@
 
 ### Conclusion
 - This bot is an invaluable tool for those involved in token management or interested in cryptocurrency trends, providing direct, tailored insights through a user-friendly interface.
+
+---
+
+**This bot was developed and implemented in a popular crypto influencer channel. All proofs are held by the author of the bot.**
